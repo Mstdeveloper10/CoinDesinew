@@ -15,6 +15,8 @@ import {
   TextInput,
   SafeAreaView,
   AppState,
+  FlatList,
+  Keyboard,
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigation } from '@react-navigation/native';
@@ -42,28 +44,13 @@ import LogoutModal from '../components/LogoutModal';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { Linking } from 'react-native';
 import { checkNotifications } from 'react-native-permissions';
+import { serverTimestamp } from '@react-native-firebase/firestore';
+import messaging from '@react-native-firebase/messaging';
+import FontAwesome from 'react-native-vector-icons/FontAwesome';
 
 import { widthPercentageToDP as wp, heightPercentageToDP as hp } from 'react-native-responsive-screen';
-const RW = val => wp((val / 375) * 100);
-const RH = val => hp((val / 812) * 100);
-
-// Custom hook for AppState management
-const useAppState = (onForeground) => {
-  const appState = useRef(AppState.currentState);
-
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', nextAppState => {
-      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        onForeground?.();
-      }
-      appState.current = nextAppState;
-    });
-
-    return () => {
-      subscription?.remove?.();
-    };
-  }, [onForeground]);
-};
+const RW = val => wp((val / 375) * 100); // responsive width base 375
+const RH = val => hp((val / 812) * 100); // responsive height base 812
 
 const Profilepage = () => {
   const dispatch = useDispatch();
@@ -71,6 +58,7 @@ const Profilepage = () => {
   const [imageLoading, setImageLoading] = useState(true);
   const [pushNotifications, setPushNotifications] = useState(true);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showOtp, setShowOtp] = useState(false)
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
   const [editphone, setEditPhone] = useState('');
@@ -81,13 +69,30 @@ const Profilepage = () => {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
   const [showPopup, setShowPopup] = useState(false);
-  const [popupType, setPopupType] = useState('info');
+  const [popupType, setPopupType] = useState<'success' | 'error' | 'login' | 'info'>('info');
   const [popupMessage, setPopupMessage] = useState('');
   const [popupTitle, setPopupTitle] = useState('');
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false)
+  const [showModal, setShowModal] = useState(false);
+  const [countryCodes, setCountryCodes] = useState<Array<{ name: string; dialCode: string; code: string }>>([]);
+  const [selectedCode, setSelectedCode] = useState('+91');
+  const [otpSuccess, setOtpSuccess] = useState(false);
+  const [phoneNo, setPhoneNo] = useState('');
+  const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
+  const otpInputs = Array.from({ length: 6 }, () => useRef<TextInput>(null));
+  const [inlineError, setInlineError] = useState('');
+  const [isResending, setIsResending] = useState(false);
+  const [resendTimer, setResendTimer] = useState(60);
+  const [canResend, setCanResend] = useState(false);
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [confirmation, setConfirmation] = useState<any>(null);
+  const [isVerifying, setIsVerifying] = useState(false);
+const [phoneNumber, setPhoneNumber] = useState('');
+const timestamp = new Date().toISOString();;
 
-  const userInfo = useSelector((state) => state.user.userinfo);
-  const isDarkMode = useSelector((state) => state.theme.isDarkMode);
+  const userInfo = useSelector((state: any) => state.user.userinfo);
+  const isDarkMode = useSelector((state: any) => state.theme.isDarkMode);
   const navigation = useNavigation();
 
   const theme = createTheme(isDarkMode);
@@ -100,87 +105,27 @@ const Profilepage = () => {
   const successAlertOpacity = useSharedValue(0);
   const successAlertScale = useSharedValue(0.8);
 
-  // Enhanced notification permission check
-  const checkNotificationPermission = async () => {
+  useEffect(() => {
+    fetchCountryCodes();
+  })
+
+  const fetchCountryCodes = async () => {
     try {
-      const { status } = await checkNotifications();
-      const isGranted = status === 'granted';
-      
-      // Only update state if it actually changed to prevent unnecessary re-renders
-      if (pushNotifications !== isGranted) {
-        setPushNotifications(isGranted);
-        
-        // Optional: Show a brief message when permission changes
-        if (isGranted) {
-          console.log('✅ Notifications enabled');
-        } else {
-          console.log('❌ Notifications disabled');
-        }
-      }
-      
-      return isGranted;
+      const res = await fetch("https://restcountries.com/v3.1/all?fields=name,cca2,idd");
+      const data = await res.json();
+      const countryList = data
+        .filter((item: any) => item.idd?.root && item.idd?.suffixes?.length > 0)
+        .map((item: any) => ({
+          name: item.name.common,
+          dialCode: `${item.idd.root}${item.idd.suffixes[0]}`,
+          code: item.cca2,
+        }))
+        .sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name));
+      setCountryCodes(countryList);
     } catch (error) {
-      console.error('Error checking notification permission:', error);
-      return false;
+      console.error('Error fetching country codes:', error);
     }
   };
-
-  // Restore app state from AsyncStorage
-  const restoreAppState = async () => {
-    try {
-      // Restore user preferences, settings, etc.
-      const savedNotificationPref = await AsyncStorage.getItem('notificationPref');
-      if (savedNotificationPref !== null) {
-        setPushNotifications(JSON.parse(savedNotificationPref));
-      }
-      
-      // Restore other app state as needed
-      const savedUserData = await AsyncStorage.getItem('userinfo');
-      if (savedUserData && !userInfo) {
-        const userData = JSON.parse(savedUserData);
-        dispatch(uploadUserinfo(userData));
-      }
-    } catch (error) {
-      console.error('Error restoring app state:', error);
-    }
-  };
-
-  // Save app state to AsyncStorage
-  const saveAppState = async () => {
-    try {
-      await AsyncStorage.setItem('notificationPref', JSON.stringify(pushNotifications));
-      // Save other important state
-    } catch (error) {
-      console.error('Error saving app state:', error);
-    }
-  };
-
-  // Handle app foreground events
-  const handleAppForeground = async () => {
-    console.log('📱 App returned to foreground');
-    
-    // Check and refresh notification permissions
-    await checkNotificationPermission();
-    
-    // Restore any lost state
-    await restoreAppState();
-    
-    // Refresh user data if needed
-    if (userInfo?.uid) {
-      try {
-        const userDoc = await firestore().collection('users').doc(userInfo.uid).get();
-        if (userDoc.exists) {
-          const freshUserData = userDoc.data();
-          dispatch(uploadUserinfo({ uid: userInfo.uid, ...freshUserData }));
-        }
-      } catch (error) {
-        console.error('Error refreshing user data:', error);
-      }
-    }
-  };
-
-  // Use the custom AppState hook
-  useAppState(handleAppForeground);
 
   useEffect(() => {
     profileOpacity.value = withTiming(1, { duration: 800 });
@@ -207,30 +152,8 @@ const Profilepage = () => {
     }
   }, [userInfo]);
 
-  // Enhanced initialization
-  useEffect(() => {
-    const initializeApp = async () => {
-      // Configure Google Sign In
-      GoogleSignin.configure({
-        webClientId: '1027380469055-9oh24gpfgudqb1eh7ticqebs2enjhm2i.apps.googleusercontent.com',
-        offlineAccess: true,
-      });
-
-      // Initial permission check and state restore
-      await checkNotificationPermission();
-      await restoreAppState();
-    };
-
-    initializeApp();
-  }, []);
-
-  // Save state when important values change
-  useEffect(() => {
-    saveAppState();
-  }, [pushNotifications]);
-
-  const showSuccessMessage = (title, message) => {
-    setTitle(title);
+  const showSuccessMessage = (title: string, message: string,) => {
+    setTitle(title)
     setSuccessMessage(message);
     setShowSuccessAlert(true);
 
@@ -251,107 +174,108 @@ const Profilepage = () => {
     }, 300);
   };
 
+  useEffect(() => {
+    GoogleSignin.configure({
+      webClientId: '1027380469055-9oh24gpfgudqb1eh7ticqebs2enjhm2i.apps.googleusercontent.com',
+      offlineAccess: true,
+    });
+  }, []);
+
   const onGoogleButtonPress = async (userInfo) => {
     try {
+      // Step 1: Google Sign In
       const googleUser = await GoogleSignin.signIn();
       const { idToken } = await GoogleSignin.getTokens();
 
       if (!idToken) {
-        showSuccessMessage("error", "Google login failed: No ID token found.");
+        showSuccessMessage("Google login failed: No ID token found.");
+        setShowSuccessModal(false);
         return;
       }
 
       const googleCredential = auth.GoogleAuthProvider.credential(idToken);
+
+      // Step 2: Link Google credential with existing phoneAuth user
       const currentUser = auth().currentUser;
 
       try {
         await currentUser.linkWithCredential(googleCredential);
-        showSuccessMessage(
-          "success",
-          "🎉 Your Google account has been successfully linked!"
-        );
+        showSuccessMessage("🎉 Your Google account has been successfully linked!");
       } catch (error) {
+        // Clear Google session so next time user can pick a new email
+        await GoogleSignin.signOut();
+
         switch (error.code) {
           case "auth/credential-already-in-use":
             await auth().signInWithCredential(googleCredential);
-            showSuccessMessage(
-              "info",
-              "This Google account was already linked. You are now signed in."
-            );
+            showSuccessMessage("This Google account was already linked. You are now signed in.");
             break;
 
           case "auth/provider-already-linked":
-            showSuccessMessage(
-              "warning",
-              "⚠️ Your account is already linked with Google."
-            );
-            break;
-
+          case "auth/unknown": // Android sometimes throws this instead
           case "auth/email-already-in-use":
-            showSuccessMessage(
-              "error",
-              "This email is already used by another account."
-            );
+            showSuccessMessage("This email is already used by another account.");
+            setShowSuccessModal(false);
             return;
 
           default:
-            console.error("Google link error:", error);
-            showSuccessMessage(
-              "error",
-              error.message || "Something went wrong while linking Google."
-            );
+            console.error("Google link unexpected error:", error);
+            showSuccessMessage("Something went wrong while linking Google. Please try again.");
+            setShowSuccessModal(false);
             return;
         }
       }
 
+      setShowSuccessModal(false);
+
+      // Step 3: Extract Google account info
       const googleName = googleUser.user?.name || "User";
       const googlePhoto = googleUser.user?.photo || null;
       const googleEmail = googleUser.user?.email;
       const { uid } = auth().currentUser;
 
+      // Step 4: Check if email exists in Firestore for another user
       const querySnapshot = await firestore()
         .collection("users")
         .where("email", "==", googleEmail)
         .get();
 
       if (!querySnapshot.empty && querySnapshot.docs[0].id !== uid) {
-        showSuccessMessage(
-          "error",
-          "This email is already associated with another account."
-        );
+        showSuccessMessage("This email is already associated with another account.");
+        setShowSuccessModal(false);
         return;
       }
 
+      // Step 5: Create user object
       const updatedUser = {
         uid,
         phone: userInfo.phone,
         email: googleEmail,
         name: googleName,
         profileImageUrl:
-          googlePhoto ||
-          `https://ui-avatars.com/api/?name=${encodeURIComponent(googleName)}`,
+          googlePhoto || `https://ui-avatars.com/api/?name=${encodeURIComponent(googleName)}`,
         googleAuth: true,
-        updatedAt: firestore.FieldValue.serverTimestamp(),
+        updatedAt: serverTimestamp(),
       };
 
-      await firestore()
-        .collection("users")
-        .doc(uid)
-        .set(updatedUser, { merge: true });
+      // Step 6: Save to Firestore
+      await firestore().collection("users").doc(uid).set(updatedUser, { merge: true });
 
+      // Step 7: Save to AsyncStorage
       await AsyncStorage.setItem("userinfo", JSON.stringify(updatedUser));
+
+      // Step 8: Update Redux (refresh UI)
       dispatch(uploadUserinfo(updatedUser));
 
-      showSuccessMessage(
-        "success",
-        "Profile updated with your Google account!"
-      );
+      showSuccessMessage("Profile updated with your Google account!");
+      setShowSuccessModal(false);
     } catch (error) {
-      console.error("Google Sign-In Error:", error);
-      showSuccessMessage(
-        "error",
-        "Something went wrong during Google sign in. Please try again."
-      );
+      // Clear Google session so next login prompts account chooser
+      await GoogleSignin.signOut();
+
+      console.error("Google Sign-In unexpected error:", error);
+      showSuccessMessage("Something went wrong during Google sign in. Please try again.");
+      setShowSuccessModal(false);
     }
   };
 
@@ -371,7 +295,8 @@ const Profilepage = () => {
 
       setUploading(true);
 
-      const uri = result.assets[0].uri;
+      const uri = result.assets[0].uri; // ✅ FIXED
+
       const fileName = `profile_photos/${userInfo.uid}.jpg`;
       const reference = storage().ref(fileName);
 
@@ -383,7 +308,7 @@ const Profilepage = () => {
         .doc(userInfo.uid)
         .set({ profileImageUrl: downloadURL }, { merge: true });
 
-      dispatch(updateProfileImage(downloadURL));
+      dispatch(updateProfileImage(downloadURL)); // ✅ updates Redux
       setImageLoading(true);
     } catch (error) {
       console.error('Error uploading profile photo:', error);
@@ -398,37 +323,37 @@ const Profilepage = () => {
   };
 
   const handleSaveProfile = async () => {
-    if (!editName.trim() || !editEmail.trim()) {
-      Alert.alert('Error', 'Please fill in all fields.');
-      return;
-    }
-
     if (!userInfo?.uid) {
-      Alert.alert('Error', 'User information not found.');
+      Alert.alert('Error', 'You need to be logged in to update your phone number.');
       return;
     }
-
-    setIsUpdating(true);
+  
+    // Clean input
+    const cleanedPhone = phoneNo.replace(/\D/g, ''); // remove non-digit characters
+    if (cleanedPhone.length < 6) {
+      Alert.alert('Invalid Number', 'Please enter a valid phone number.');
+      return;
+    }
+  
+    const formattedPhone = selectedCode + cleanedPhone; // e.g., +911234567890
+  
     try {
-      await firestore().collection('users').doc(userInfo.uid).update({
-        name: editName.trim(),
-        email: editEmail.trim(),
-        updatedAt: firestore.FieldValue.serverTimestamp(),
-      });
-
-      const updatedUserInfo = {
-        ...userInfo,
-        name: editName.trim(),
-        email: editEmail.trim(),
-        phone: editphone.trim(),
-      };
-      dispatch(uploadUserinfo(updatedUserInfo));
-
-      setShowEditModal(false);
-      showSuccessMessage('Profile updated successfully!', "Success");
+      setIsUpdating(true); // optional loading state
+  
+      // Update only the phone field in Firestore
+      await firestore()
+        .collection('users')
+        .doc(userInfo.uid)
+        .set({ phone: formattedPhone }, { merge: true });
+  
+      // Update Redux so UI reflects change
+      dispatch(uploadUserinfo({ ...userInfo, phone: formattedPhone }));
+  
+      Alert.alert('Success', 'Phone number updated successfully!');
+      setShowEditModal(false); // close edit modal
     } catch (error) {
-      console.error('Error updating profile:', error);
-      Alert.alert('Error', 'Failed to update profile. Please try again.');
+      console.error('Failed to update phone number:', error);
+      Alert.alert('Error', 'Failed to update phone number. Please try again.');
     } finally {
       setIsUpdating(false);
     }
@@ -453,7 +378,6 @@ const Profilepage = () => {
         'userinfo',
         'skip',
         'isLoggedin',
-        'notificationPref',
       ]);
 
       dispatch(clearUser());
@@ -461,7 +385,7 @@ const Profilepage = () => {
     } catch (error) {
       console.error('Error during logout:', error);
       dispatch(clearUser());
-      navigation.navigate('profile');
+      navigation.navigate('profile' as never);
     }
   };
 
@@ -469,42 +393,102 @@ const Profilepage = () => {
     dispatch(toggleTheme());
   };
 
-  // Enhanced notification settings handler
-  const handlePushNotificationToggle = () => {
-    Alert.alert(
-      "Change Notification Settings",
-      "To update notification permissions, you'll be redirected to your phone's settings. After making changes, return to the app and the settings will be automatically refreshed.",
-      [
-        { 
-          text: "Go to Settings", 
-          onPress: () => {
-            openSettingsLink();
-            // The permission will be auto-checked when user returns via AppState listener
-          }
-        },
-        { text: "Cancel", style: "cancel" }
-      ]
-    );
-  };
+  const checkPermission = async () => {
+    if (isCheckingPermissions.current) return;
 
-  const openSettingsLink = () => {
-    if (Platform.OS === "android") {
-      try {
-        if (Platform.Version >= 26) {
-          Linking.openSettings();
-        } else {
-          Linking.openURL("app-settings:");
-        }
-      } catch (e) {
-        console.log("Failed to open notification settings:", e);
-        Linking.openSettings();
-      }
-    } else {
-      Linking.openSettings();
+    try {
+      isCheckingPermissions.current = true;
+      setIsChecking(true);
+
+      const { status } = await checkNotifications();
+      console.log("🔔 Permission status:", status);
+
+      setPushNotifications(status === "granted");
+    } catch (error) {
+      console.error("❌ Error checking permissions:", error);
+      setPushNotifications(false);
+    } finally {
+      isCheckingPermissions.current = false;
+      setIsChecking(false);
     }
   };
 
-  // Animation styles
+  // 📱 App state listener to refresh on resume
+  useEffect(() => {
+    checkPermission();
+
+    const handleAppStateChange = (state) => {
+      if (state === "active") {
+        setTimeout(checkPermission, 300);
+      }
+    };
+
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange
+    );
+    return () => subscription?.remove();
+  }, []);
+
+  // ⚙️ Open app notification settings
+  const openNotificationSettings = async () => {
+    if (Platform.OS === "android") {
+      try {
+        if (Platform.Version >= 26) {
+          // Opens directly to this app's notification settings on Android 8+
+          await Linking.openSettings();
+        } else {
+          const canOpen = await Linking.canOpenURL("app-settings:");
+          if (canOpen) {
+            await Linking.openURL("app-settings:");
+          } else {
+            await Linking.openSettings();
+          }
+        }
+      } catch (e) {
+        console.error("Failed to open settings:", e);
+        Alert.alert(
+          "Settings Unavailable",
+          "Please manually check notification settings in your device settings."
+        );
+      }
+    } else {
+      try {
+        await Linking.openSettings();
+      } catch (e) {
+        console.error("Failed to open iOS settings:", e);
+        Alert.alert(
+          "Settings Unavailable",
+          "Please manually check notification settings in your device settings."
+        );
+      }
+    }
+  };
+
+  // 🔘 Toggle handler with user-friendly alert
+  const handlePushNotificationToggle = () => {
+    const currentStatus = pushNotifications ? "enabled" : "disabled";
+    const action = pushNotifications ? "disable" : "enable";
+
+    Alert.alert(
+      "Update Notification Settings",
+      `Notifications are currently ${currentStatus}.\n\nYou'll be redirected to system settings to ${action} them. After making changes, please reopen this app to refresh the status.`,
+      [
+        {
+          text: "Go to Settings",
+          onPress: openNotificationSettings,
+          style: "default"
+        },
+        {
+          text: "Cancel",
+          style: "cancel"
+        }
+      ],
+      { cancelable: true }
+    );
+  };
+
+  // Animated styles
   const profileAnimatedStyle = useAnimatedStyle(() => ({
     opacity: profileOpacity.value,
     transform: [{ scale: profileScale.value }],
@@ -522,12 +506,338 @@ const Profilepage = () => {
 
   const handleTermandCondition = () => {
     let url = "https://coindesi.ai/terms-conditions/"
-    navigation.navigate('Browser', { url: url });
+    navigation.navigate('Browser', { url: url })
   };
 
   const handlePrivacyandPolicy = () => {
     let url = "https://coindesi.ai/privacy-policy/"
-    navigation.navigate('Browser', { url: url });
+    navigation.navigate('Browser', { url: url })
+  }
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+
+    if (resendTimer > 0 && !canResend) {
+      interval = setInterval(() => {
+        setResendTimer((prev) => {
+          if (prev <= 1) {
+            setCanResend(true);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+  }, [resendTimer, canResend]);
+
+  const handleResendOtp = async () => {
+    if (!canResend || isResending) {
+      logWithTimestamp('WARN', 'Resend blocked', { canResend, isResending });
+      return;
+    }
+
+    const startTime = Date.now();
+    logWithTimestamp('INFO', 'Starting OTP resend');
+
+    try {
+      setIsResending(true);
+      setOtpDigits(['', '', '', '', '', '']);
+      setInlineError('');
+
+      // Prepare phone number
+      const cleanedPhone = phoneNumber.replace(/\D/g, '');
+      const e164Phone = `${selectedCode}${cleanedPhone}`;
+
+      logWithTimestamp('INFO', 'Sending new OTP', { phone: e164Phone.replace(/\d(?=\d{4})/g, '*') });
+
+      const newConfirmation = await auth().signInWithPhoneNumber(e164Phone);
+      setConfirmation(newConfirmation);
+      dispatch({ type: 'SET_CONFIRMATION', payload: newConfirmation });
+
+      // Reset timer
+      setResendTimer(60);
+      setCanResend(false);
+
+      const duration = Date.now() - startTime;
+      logWithTimestamp('INFO', 'OTP resent successfully', { duration: `${duration}ms` });
+
+      // Show success feedback
+      Alert.alert('Success', 'A new verification code has been sent to your phone.');
+
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      logWithTimestamp('ERROR', 'Failed to resend OTP', {
+        error: error.message,
+        code: error.code,
+        duration: `${duration}ms`
+      });
+
+      let userMessage = 'Failed to resend OTP. Please try again.';
+
+      switch (error.code) {
+        case 'auth/too-many-requests':
+          userMessage = 'Too many requests. Please wait before requesting another code.';
+          break;
+        case 'auth/network-request-failed':
+          userMessage = 'Network error. Please check your connection.';
+          break;
+        case 'auth/invalid-phone-number':
+          userMessage = 'Invalid phone number. Please go back and try again.';
+          break;
+        case 'auth/quota-exceeded':
+          userMessage = 'SMS quota exceeded. Please try again later.';
+          break;
+      }
+
+      setErrorModalMessage(userMessage);
+      setShowErrorModal(true);
+
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  const logWithTimestamp = (level: 'INFO' | 'ERROR' | 'WARN', message: string, data?: any) => {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] [OTP_VERIFICATION] [${level}] ${message}`;
+
+    if (level === 'ERROR') {
+      console.error(logMessage, data || '');
+    } else if (level === 'WARN') {
+      console.warn(logMessage, data || '');
+    } else {
+      console.log(logMessage, data || '');
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      logWithTimestamp('INFO', 'OTP Verification component unmounting');
+    };
+  }, []);
+
+  const handleSendOtp = async () => {
+    logWithTimestamp("INFO", "Starting OTP send process");
+  
+    try {
+      if (otpLoading) return; // prevent multiple taps
+  
+      const formattedPhone = selectedCode + phoneNo;
+  
+      // Basic phone number validation (10-15 digits)
+      if (!/^\d{10,15}$/.test(phoneNo)) {
+        showSuccessMessage("Please enter a valid phone number.");
+        return;
+      }
+  
+      setOtpLoading(true);
+      setPhoneNumber(formattedPhone); // ✅ save it for verify step
+  
+      // 🔎 Check in Firestore before sending OTP
+      const phoneQuery = await firestore()
+        .collection("users")
+        .where("phone", "==", phoneNo)
+        .limit(1)
+        .get();
+  
+      if (!phoneQuery.empty) {
+        // 🚨 Phone already registered
+        setShowEditModal(false)
+        showSuccessMessage(
+          "Number Already Registered",
+          "This phone number is already associated with an account. Please log in instead."
+        );
+        setOtpLoading(false);
+        return;
+      }
+  
+      // ✅ Phone not found → Send OTP using Firebase
+      const confirmationResult = await auth().signInWithPhoneNumber(formattedPhone);
+  
+      setConfirmation(confirmationResult); // store for verification later
+      setOtpSuccess(true);
+  
+      setTimeout(() => {
+        setOtpSuccess(false);
+        setShowOtp(true);
+        setShowEditModal(false)
+        
+      }, 2000);
+      
+  
+      logWithTimestamp("INFO", "OTP sent successfully", { phone: formattedPhone });
+  
+    } catch (error: any) {
+      console.error("OTP send error:", error);
+      setShowEditModal(false)
+      showSuccessMessage(
+        error?.message ||
+          "Failed to send OTP. Make sure your device has Play Services and a valid SHA key."
+      );
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+  
+  const handleOtpChange = (text: string, index: number) => {
+    try {
+      // Clean input - remove non-digits
+      const cleanText = text.replace(/\D/g, '');
+
+      // Handle paste of full OTP
+      if (cleanText.length > 1) {
+        logWithTimestamp('INFO', 'Multiple digits detected, handling as paste', { text: cleanText });
+        handlePastedOtp(cleanText, index);
+        return;
+      }
+
+      const digit = cleanText.slice(0, 1);
+      const newDigits = [...otpDigits];
+      newDigits[index] = digit;
+      setOtpDigits(newDigits);
+
+      // Auto-focus next input
+      if (digit && index < otpInputs.length - 1) {
+        otpInputs[index + 1].current?.focus();
+      }
+
+      // Clear inline error when user starts typing
+      if (inlineError) {
+        setInlineError('');
+      }
+
+      // Auto-verify when all digits are entered
+      if (newDigits.every((d) => d && d.trim().length > 0)) {
+        Keyboard.dismiss();
+        logWithTimestamp('INFO', 'All OTP digits entered, auto-verifying');
+        setTimeout(() => {
+          handleVerifyOtp(newDigits.join(''));
+        }, 100);
+      }
+
+    } catch (error) {
+      logWithTimestamp('ERROR', 'Error handling OTP input change', error);
+    }
+  };
+
+  // Enhanced OTP verification with better error handling
+ const handleVerifyOtp = async (manualOtp?: string) => {
+  setInlineError("");
+  const code = manualOtp || otpDigits.join("");
+
+  // 🔹 Basic input validation
+  if (code.length !== 6) {
+    setInlineError("Please enter all 6 digits.");
+    return;
+  }
+  if (!/^\d{6}$/.test(code)) {
+    setInlineError("Please enter only numbers.");
+    return;
+  }
+  if (!confirmation) {
+    setInlineError("Session expired. Please request a new code.");
+    return;
+  }
+
+  setIsVerifying(true);
+
+  try {
+    // ✅ Verify OTP with Firebase
+    const result = await confirmation.confirm(code);
+    const phoneUser = result?.user;
+    if (!phoneUser) throw new Error("OTP verification failed - no user object returned");
+
+    if (!userInfo?.uid) throw new Error("No UID available in userInfo");
+
+    // ✅ Update only the phone field in Firestore
+    await firestore().collection("users").doc(userInfo.uid).set(
+      {
+        phone: phoneNo,
+      },
+      { merge: true }
+    );
+
+    // ✅ Update Redux userInfo locally
+    const updatedUser = {
+      ...userInfo,
+      phone: phoneNo,
+    };
+    dispatch(uploadUserinfo(updatedUser));
+
+    // ✅ Update AsyncStorage
+    await AsyncStorage.setItem("userinfo", JSON.stringify(updatedUser));
+
+    // ✅ Hide OTP UI
+    setShowOtp(false);
+
+    // ✅ Show success
+    showSuccessMessage("Phone Verified", "Your phone number has been updated successfully!");
+
+    // ✅ Refresh UI (force re-render)
+    // easiest way = trigger a navigation refresh or set a state that re-renders
+    // For example:
+    // navigation.replace("Profile");  // if using react-navigation
+    // OR force state refresh:
+    setTimeout(() => {
+      // reload current page if needed
+    }, 300);
+
+  } catch (error: any) {
+    console.error("OTP verification failed:", error);
+    let userMessage = "Verification failed. Please try again.";
+
+    switch (error.code) {
+      case "auth/invalid-verification-code":
+        userMessage = "Invalid OTP code. Please check and try again.";
+        break;
+      case "auth/session-expired":
+      case "auth/code-expired":
+        userMessage = "OTP has expired. Please request a new code.";
+        break;
+      case "auth/too-many-requests":
+        userMessage = "Too many attempts. Please try again later.";
+        break;
+      case "auth/network-request-failed":
+        userMessage = "Network error. Please check your connection.";
+        break;
+    }
+    setInlineError(userMessage);
+  } finally {
+    setIsVerifying(false);
+  }
+};
+
+  
+  const handleKeyPress = (e: any, index: number) => {
+    try {
+      if (e.nativeEvent.key === 'Backspace') {
+        const newDigits = [...otpDigits];
+
+        if (otpDigits[index]) {
+          // Clear current digit
+          newDigits[index] = '';
+          setOtpDigits(newDigits);
+        } else if (index > 0) {
+          // Move to previous input and clear it
+          otpInputs[index - 1].current?.focus();
+          newDigits[index - 1] = '';
+          setOtpDigits(newDigits);
+        }
+
+        // Clear error when user starts editing
+        if (inlineError) {
+          setInlineError('');
+        }
+      }
+    } catch (error) {
+      logWithTimestamp('ERROR', 'Error handling key press', error);
+    }
   };
 
   return (
@@ -644,31 +954,32 @@ const Profilepage = () => {
                     <TouchableOpacity
                       disabled={!!(userInfo.name && userInfo.phone && userInfo.email)} // disables if all are present
                       onPress={() =>
-                        userInfo.phoneAuth ? onGoogleButtonPress(userInfo) : handleEditProfile()
+                        userInfo.phoneAuth ? setShowSuccessModal(true) : handleEditProfile()
                       }
                     >
                       <Image
                         source={require('../assets/google.jpg')}
-                        style={{ height: 40, width: 48, borderRadius: 40, opacity: userInfo.name && userInfo.phone && userInfo.email ? 0.5 : 1 }}
+                        style={{ height: 40, width: 48, borderRadius: 40, display: userInfo.name && userInfo.phone && userInfo.email ? "none" : "flex" }}
                       />
                     </TouchableOpacity>
                   ) : (
                     <TouchableOpacity
                       style={[
                         styles.editButton,
-                        { backgroundColor: theme.primary, opacity: userInfo.name && userInfo.phone && userInfo.email ? 0.5 : 1 },
+                        {  display: userInfo.name && userInfo.phone && userInfo.email ? "none" : "flex" },
                       ]}
                       disabled={!!(userInfo.name && userInfo.phone && userInfo.email)} // disables if all are present
                       onPress={() =>
                         userInfo.phoneAuth ? onGoogleButtonPress(userInfo) : handleEditProfile()
                       }
                     >
-                      <Text style={styles.editButtonText}>Edit</Text>
+                      <FontAwesome name="phone-square" color="#0F70FF" size={36} />
                     </TouchableOpacity>
                   )}
 
 
                 </View>
+
               ) : (
                 <View style={styles.loginCardContent}>
                   <Ionicons name="person-circle-outline" color={theme.primary} size={RFValue(64)} />
@@ -680,7 +991,7 @@ const Profilepage = () => {
                     style={[styles.loginButton, { backgroundColor: theme.primary }]}
                     onPress={() => (navigation as any).navigate('Login')}
                   >
-                    <Text style={[styles.loginButtonText,{fontFamily:"lato.medium"}]}>Login</Text>
+                    <Text style={[styles.loginButtonText, { fontFamily: "lato.medium" }]}>Login</Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -798,64 +1109,49 @@ const Profilepage = () => {
               </View>
 
               <View style={styles.modalBody}>
-                <View style={styles.inputContainer}>
-                  <Text style={[styles.inputLabel, { color: theme.text }]}>Name</Text>
-                  <TextInput
-                    style={[
-                      styles.textInput,
-                      {
-                        backgroundColor: theme.background,
-                        color: theme.text,
-                        borderColor: theme.border,
-                      },
-                    ]}
-                    value={editName}
-                    onChangeText={setEditName}
-                    placeholder="Enter your name"
-                    placeholderTextColor={theme.textSecondary}
-                  />
-                </View>
+
                 {userInfo.googleAuth && (
-                  <View style={styles.inputContainer}>
-                    <Text style={[styles.inputLabel, { color: theme.text }]}>Phone No.</Text>
+                  <View style={styles.phoneInputRow}>
+
+                    <TouchableOpacity
+                      style={[styles.countryCodeButton, {
+                        borderColor: theme.border,
+                        backgroundColor: theme.card
+                      }]}
+                      onPress={() => setShowModal(true)}
+                    >
+                      <Text style={[styles.countryCodeText, { color: theme.text }]}>{selectedCode}</Text>
+                      <Ionicons name="chevron-down" size={16} color={theme.text} />
+                    </TouchableOpacity>
                     <TextInput
+                      value={phoneNo}
+                      onChangeText={(text) => {
+                        const cleaned = text.replace(/[^0-9]/g, '');
+                        setPhoneNo(cleaned);
+
+                        if (cleaned.length === 10) {
+                          Keyboard.dismiss();   // ✅ close keyboard when 10 digits entered
+                        }
+                      }}
                       style={[
-                        styles.textInput,
+                        styles.phoneInput,
                         {
-                          backgroundColor: theme.background,
-                          color: theme.text,
                           borderColor: theme.border,
+                          backgroundColor: theme.card,
+                          color: theme.text,
                         },
                       ]}
-                      value={editphone}
-                      onChangeText={setEditPhone}
-                      placeholder="Enter your Phone no."
+                      placeholder="Enter phone number"
                       placeholderTextColor={theme.textSecondary}
-                      keyboardType="numeric"
-                      autoCapitalize="none"
+                      keyboardType="phone-pad"
+                      maxLength={10}
                     />
                   </View>
                 )}
 
-                {userInfo.phoneAuth && (
-                  <View style={styles.inputContainer}>
-                    <Text style={[styles.inputLabel, { color: theme.text }]}>Email</Text>
-                    <TextInput
-                      style={[
-                        styles.textInput,
-                        {
-                          backgroundColor: theme.background,
-                          color: theme.text,
-                          borderColor: theme.border,
-                        },
-                      ]}
-                      value={editEmail}
-                      onChangeText={setEditEmail}
-                      placeholder="Enter your email"
-                      placeholderTextColor={theme.textSecondary}
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                    />
+                {otpSuccess && (
+                  <View >
+                    <Text style={[styles.otpSuccessText]}>OTP sent successfully,please check your phone</Text>
                   </View>
                 )}
               </View>
@@ -869,22 +1165,115 @@ const Profilepage = () => {
                     fontSize: 14          // optional font size
                   }} />
                 <Button
-                  title={isUpdating ? "Saving..." : "Save"}
-                  onPress={handleSaveProfile}
+                  title={otpLoading ? "Sending  OTP..." : "Send OTP"}
+                  onPress={() => {
+                    handleSendOtp();
+                  }}
                   loading={isUpdating}
                   disabled={isUpdating}
                   size="small"
                   style={styles.modalButton}
                   textStyle={{
                     fontFamily: 'lato.medium',   // custom font family
-                    fontWeight: '400',    // bold
-                    fontSize: 14          // optional font size
+                    fontWeight: '400',           // weight
+                    fontSize: 14                 // optional font size
                   }}
                 />
+
               </View>
             </View>
           </View>
         </Modal>
+
+        <Modal
+          visible={showOtp}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowOtp(false)}
+        >
+          <View style={styles.alertOverlay}>
+            <View style={[styles.alertContent, { backgroundColor: theme.card }]}>
+              <Text style={[styles.alertTitle, { color: theme.text }]}>
+                Enter 6-digit OTP
+              </Text>
+
+              {/* OTP Input Boxes */}
+              <View style={{ flexDirection: "row", justifyContent: "space-between", marginVertical: 20 }}>
+                {otpDigits.map((digit, idx) => (
+                  <View key={idx} style={styles.otpInputWrapper}>
+                    <TextInput
+                      ref={otpInputs[idx]}
+                      value={digit}
+                      onChangeText={(text) => handleOtpChange(text, idx)}
+                      onKeyPress={(e) => handleKeyPress(e, idx)}
+                      style={{
+                        width: 40,
+                        height: 50,
+                        borderWidth: 1,
+                        borderColor: theme.textSecondary,
+                        borderRadius: 8,
+                        textAlign: "center",
+                        fontSize: 20,
+                        color: theme.text,
+                        marginHorizontal: 4,
+                      }}
+                      keyboardType="number-pad"
+                      maxLength={1}
+                      selectionColor={theme.primary}
+                      textContentType="oneTimeCode"   // iOS autofill
+                      autoComplete="sms-otp"          // Android autofill
+                      importantForAutofill="yes"      // Android autofill priority
+                    />
+                  </View>
+                ))}
+              </View>
+
+              {inlineError ? <Text style={[styles.errorText, { color: theme.error }]}>{inlineError}</Text> : null}
+
+              <TouchableOpacity
+                style={[styles.resendContainer, !canResend && styles.resendContainerDisabled]}
+                onPress={handleResendOtp}
+                disabled={isResending || !canResend}
+              >
+                <Text style={[styles.resendText, { color: canResend ? theme.primary : theme.textSecondary }]}>
+                  {canResend ? (isResending ? 'Resending...' : 'Resend Code') : `Resend in ${resendTimer}s`}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Verify Button */}
+              <Button
+                title={isVerifying ? "Verify..." : "Verify"}
+                onPress={() => handleVerifyOtp(userInfo)}
+
+              />
+            </View>
+          </View>
+        </Modal>
+
+
+        <Modal
+          visible={showSuccessModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowSuccessModal(false)}
+        >
+          <View style={styles.alertOverlay}>
+            <View style={[styles.alertContent, { backgroundColor: theme.card }]}>
+              <Text style={[styles.alertTitle, { color: theme.text }]}>
+                Add your Google Account
+              </Text>
+
+              <Button
+                title="Authorise with google"
+                onPress={() => {
+                  setShowSuccessModal(false);      // ✅ always close modal first
+                  onGoogleButtonPress(userInfo);   // then run Google sign-in
+                }}
+              />
+            </View>
+          </View>
+        </Modal>
+
 
         {/* Success Alert */}
         {showSuccessAlert && (
@@ -905,6 +1294,35 @@ const Profilepage = () => {
           </Animated.View>
         )}
 
+        <Modal visible={showModal} animationType="slide" transparent>
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.card }]}>
+              <View style={[styles.modalHeader, { borderBottomColor: theme.border }]}>
+                <Text style={[styles.modalTitle, { color: theme.text }]}>Select Country</Text>
+                <TouchableOpacity onPress={() => setShowModal(false)}>
+                  <Ionicons name="close" size={24} color={theme.text} />
+                </TouchableOpacity>
+              </View>
+              <FlatList
+                data={countryCodes}
+                keyExtractor={(item, index) => item.code + index}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={[styles.countryItem, { borderBottomColor: theme.border }]}
+                    onPress={() => {
+                      setSelectedCode(item.dialCode);
+                      setShowModal(false);
+                    }}
+                  >
+                    <Text style={[styles.countryName, { color: theme.text }]}>{item.name}</Text>
+                    <Text style={[styles.countryCode, { color: theme.textSecondary }]}>{item.dialCode}</Text>
+                  </TouchableOpacity>
+                )}
+              />
+            </View>
+          </View>
+        </Modal>
+
         {/* Login Prompt Modal */}
         <LoginPrompt
           visible={showLoginPrompt}
@@ -919,6 +1337,121 @@ const Profilepage = () => {
 };
 
 const styles = StyleSheet.create({
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    maxHeight: '70%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: RW(20),
+    borderBottomWidth: 1,
+  },
+  modalTitle: {
+    fontSize: RFValue(18),
+    fontWeight: '600',
+
+  },
+  countryItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: RW(16),
+    borderBottomWidth: 1,
+  },
+  countryName: {
+    fontSize: RFValue(16),
+  },
+  countryCode: {
+    fontSize: RFValue(14),
+  },
+  phoneInputRow: {
+    flexDirection: 'row',
+    gap: RW(12),
+  },
+
+  countryCodeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: RW(12),
+    paddingVertical: RH(18),
+    borderWidth: 1,
+    borderRadius: 8,
+    minWidth: RW(80),
+  },
+  countryCodeText: {
+    fontSize: RFValue(16),
+    fontWeight: '400',
+    fontFamily: "Inter_28pt-Regular"
+  },
+  phoneInput: {
+    flex: 1,
+    paddingHorizontal: RW(12),
+    paddingVertical: RH(12),
+    borderWidth: 1,
+    borderRadius: 8,
+    fontSize: RFValue(16),
+    fontFamily: "Inter_28pt-Regular"
+  },
+  otpContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: RW(8),
+  },
+  otpInput: {
+    flex: 1,
+    height: RH(48),
+    borderWidth: 1,
+    borderRadius: 8,
+    textAlign: 'center',
+    fontSize: RFValue(18),
+    fontWeight: '600',
+  },
+
+  alertOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: RW(20),
+  },
+  alertContent: {
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: 'white',
+    borderRadius: RW(16),
+    padding: RW(24),
+    width: '100%',
+    maxWidth: RW(400),
+    maxHeight: '80%',
+  },
+  alertTitle: {
+    alignItems: "center",
+    fontSize: RFValue(20),
+    fontWeight: '600',
+    marginTop: RH(12),
+    marginBottom: RH(10),
+    textAlign: "center",
+    fontFamily: "lato.semibold",
+  },
+  alertMessage: {
+    fontSize: RFValue(16),
+    textAlign: 'center',
+    marginBottom: RH(20),
+    lineHeight: RFValue(22),
+  },
+  alertButton: {
+    minWidth: RW(100),
+  },
   container: {
     flex: 1,
   },
@@ -1238,10 +1771,11 @@ const styles = StyleSheet.create({
     marginBottom: RH(16),
   },
   successAlertTitle: {
+    textAlign: "center",
     fontSize: RFValue(20),
-    fontWeight: '700',
+    fontWeight: '600',
     color: '#333',
-    marginBottom: RH(8),
+    fontFamily: "lato.semibold"
   },
   successAlertMessage: {
     fontSize: RFValue(16),

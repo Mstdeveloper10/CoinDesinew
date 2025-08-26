@@ -100,13 +100,11 @@ const Liked = () => {
         {item.image ? (
           <Image source={{ uri: item.image }} style={styles.articleImage} />
         ) : (
-          <View style={styles.articleImagePlaceholder}>
-            <MaterialCommunityIcons
-              name="image-off"
-              size={RFValue(isTablet ? 32 : 24)}
-              color={theme.textLight}
-            />
-          </View>
+          
+           <View style={[styles.articleImagePlaceholder, { backgroundColor: theme.background }]}>
+              <Image source={require('../assets/Logo.png')} style={styles.logo} resizeMode="contain" />
+            </View>
+          
         )}
       </View>
 
@@ -120,7 +118,7 @@ const Liked = () => {
         }
       >
         <Text style={[styles.articleText, { color: theme.text }]} numberOfLines={3}>
-          {item.summary || item.title || item.title}
+          {item.title || item.title}
         </Text>
       </TouchableOpacity>
     </View>
@@ -286,6 +284,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  logo:{
+    height:"100%",
+    width:"100%"
+  },
+  
   articleContent: { flex: 1, justifyContent: 'center' },
   articleText: {
     fontSize: RFValue(isTablet ? 20 : 16),

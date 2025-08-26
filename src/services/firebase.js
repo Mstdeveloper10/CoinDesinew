@@ -48,7 +48,7 @@ export function notificationListener() {
     importance: AndroidImportance.HIGH,
   });
 
-  // Foreground messages
+  // Foreground messages (show notification, don't navigate instantly)
   const unsubscribeOnMessage = messaging().onMessage(async remoteMessage => {
     console.log('📩 Foreground message:', remoteMessage);
 
@@ -57,6 +57,7 @@ export function notificationListener() {
 
     await notifee.displayNotification({
       title: remoteMessage.notification?.title,
+      body: remoteMessage.notification?.body,
       android: {
         channelId: 'default',
         sound: 'default',
@@ -64,23 +65,15 @@ export function notificationListener() {
         style: imageUrl
           ? {
               type: AndroidStyle.BIGPICTURE,
-              picture: imageUrl, // ✅ Show image in Android notification
+              picture: imageUrl,
             }
           : undefined,
       },
       ios: {
         sound: 'default',
-        attachments: imageUrl
-          ? [
-              {
-                url: imageUrl, // ✅ Show image in iOS notification
-              },
-            ]
-          : [],
+        attachments: imageUrl ? [{ url: imageUrl }] : [],
       },
     });
-
-    handleNotificationNavigation(remoteMessage);
   });
 
   // When notification is opened from background
@@ -111,5 +104,9 @@ export function notificationListener() {
 function handleNotificationNavigation(remoteMessage) {
   const { article_id, url } = remoteMessage.data || {};
   // Example: navigate to article details or discover screen
-  navigate('Home', { screen: 'Discover', articleId: article_id || null, url: url || null });
+  navigate('Home', {
+    screen: 'Discover',
+    articleId: article_id || null,
+    url: url || null,
+  });
 }

@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   Dimensions,
-  StatusBar,
   SafeAreaView,
   ActivityIndicator,
   Image,
@@ -664,11 +663,16 @@ const DiscoverScreens = () => {
     });
   };
 
-  const truncateText = (text: string, maxWords: number = 60) => {
-    const words = text.split(' ');
+  const truncateText = (text: any, maxWords: number = 60): string => {
+    if (typeof text !== "string") return ""; // safety check
+    
+    // Split text into words while keeping emojis intact
+    const words = text.trim().split(/\s+/); 
+  
     if (words.length <= maxWords) return text;
-    return words.slice(0, maxWords).join(' ') + '...';
+    return words.slice(0, maxWords).join(" ") + "…"; // nicer ellipsis
   };
+  
 
   const getSentimentColor = (sentiment?: string) => {
     switch (sentiment) {
@@ -931,8 +935,8 @@ const DiscoverScreens = () => {
         <View style={styles.contentContainer}>
           <Text style={[styles.newsTitle, { color: theme.text, }]} numberOfLines={3}>{item.title}</Text>
 
-          <Text style={[styles.newsSummary, { color: theme.textSecondary }]} numberOfLines={9}>
-            {truncateText(item.summary, 60)}
+          <Text style={[styles.newsSummary, { color: theme.textSecondary }]} numberOfLines={10}>
+            {item.summary}
           </Text>
 
           <View style={{
